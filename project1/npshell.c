@@ -1,7 +1,17 @@
 #include "npshell.h"
 
-void sigchld_handler(int signo) {
+int shell_fork_num = 0;
+int process_fork_num = 0;
+
+void shell_sigchld_handler(int signo) {
     waitpid(-1, NULL, 0);
+    shell_fork_num--;
+    return;
+}
+
+void process_sigchld_handler(int signo) {
+    waitpid(-1, NULL, 0);
+    process_fork_num--;
     return;
 }
 
@@ -93,8 +103,6 @@ void child_process(char** cmd, int pos, int infd, int outfd, int err_redir) {
             close(pfd[0]);
             close(pfd[1]);
 
-            signal(SIGCHLD, sigchld_handler);
-
             /* waitpid(pid, &status, 0); */
 
             /* exec error, break out pipe */
@@ -103,6 +111,9 @@ void child_process(char** cmd, int pos, int infd, int outfd, int err_redir) {
             /*     exit(1); */
             /* } */
 
+            while(process_fork_num > MAX_FORK_NUM);
+
+            process_fork_num++;
             child_process(cmd, pos + 1, -1, outfd, err_redir);
         }
     }
@@ -115,12 +126,15 @@ int main(void) {
     char *cmd[MAX_PIPE];
     int pipe_pos;
     pid_t pid;
+    int num_pipe_exist;
     int num_pipe[MAX_NUM_PIPE][2];
     int infd, outfd, err_redir;
     int closefd;
     long N_pipe;
     char* endptr;
     int i;
+
+    signal(SIGCHLD, shell_sigchld_handler);
 
     setenv("PATH", "bin:.", 1);
 
@@ -137,8 +151,13 @@ int main(void) {
 
         memset(line, 0, MAX_LINE_LEN);
 
-        errno = 0;
-        if((cnt = read(STDIN_FILENO, line, MAX_LINE_LEN)) > 1) {
+        num_pipe_exist = 0;
+        if(fgets(line, MAX_LINE_LEN, stdin) != NULL) {
+            cnt = strlen(line);
+            if(cnt == 1) {
+                continue;
+            }
+
             line[--cnt] = '\0';
 
             strcpy(line_cpy, line);
@@ -176,6 +195,7 @@ int main(void) {
                         num_pipe[N_pipe - 1][1] = pfd[1];
                     }
                     outfd = num_pipe[N_pipe - 1][1];
+                    num_pipe_exist = 1;
                 }
             }
 
@@ -193,6 +213,7 @@ int main(void) {
                                 num_pipe[N_pipe - 1][1] = pfd[1];
                             }
                             outfd = num_pipe[N_pipe - 1][1];
+                            num_pipe_exist = 1;
                         }
                     }
                 }
@@ -242,6 +263,9 @@ int main(void) {
             }
 
             /* other commands */
+            while(shell_fork_num > MAX_FORK_NUM);
+
+            shell_fork_num++;
             pid = fork();
 
             if(pid < 0)
@@ -276,27 +300,24 @@ int main(void) {
                     pipe_pos++;
                 }
 
+                signal(SIGCHLD, process_sigchld_handler);
+
                 child_process(cmd, 0, infd, outfd, err_redir);
             }
             else {
                 /* parent process */
-                waitpid(pid, NULL, 0);
+                if(num_pipe_exist)
+                    waitpid(pid, NULL, WNOHANG);
+                else
+                    waitpid(pid, NULL, 0);
                 close(infd);
                 close(closefd);
             }
         }
-        else if(cnt == 1)
-            continue;
-        else{
-            if(errno == 0) {
-                /* detect EOF */
-                printf("\n");
-                break;
-            }
-            else
-                err_sys("read error");
+        else {
+            printf("\n");
+            break;
         }
     }
-
     return 0;
 }
