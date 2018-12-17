@@ -295,6 +295,7 @@ class console {
             output_shell(session, string(reply));
             boost::this_thread::sleep(boost::posix_time::milliseconds(SLEEP_TIME));
 
+            size_t conn_close = 0;
             while (getline(_ifstream, line)) {
                 line = line + "\n";
                 // strcpy(request, line.c_str());
@@ -304,19 +305,27 @@ class console {
                 output_command(session, string(request));
                 boost::this_thread::sleep(boost::posix_time::milliseconds(SLEEP_TIME));
 
-                memset(reply, 0, MAX_REPLY_LENGTH);
-                _socket.read_some(buffer(reply, MAX_REPLY_LENGTH), error);
-                if (error == error::eof) {
-                    /* connection closed */
-                    break;
-                }
-                output_shell(session, string(reply));
-                boost::this_thread::sleep(boost::posix_time::milliseconds(SLEEP_TIME));
+                while (1) {
+                    memset(reply, 0, MAX_REPLY_LENGTH);
+                    _socket.read_some(buffer(reply, MAX_REPLY_LENGTH), error);
+                    if (error == error::eof) {
+                        /* connection closed */
+                        conn_close = 1;
+                        break;
+                    }
+                    output_shell(session, string(reply));
+                    boost::this_thread::sleep(boost::posix_time::milliseconds(SLEEP_TIME));
 
-                if (line == "exit\n") {
-                    /* tricky way to determine if connection closed */
-                    break;
+                    if (strcmp(reply + (strlen(reply) - 2), "% ") == 0)
+                        break;
+                    if (line == "exit\n") {
+                        /* tricky way to determine if connection closed */
+                        conn_close = 1;
+                        break;
+                    }
                 }
+                if (conn_close == 1)
+                    break;
             }
         }
 
