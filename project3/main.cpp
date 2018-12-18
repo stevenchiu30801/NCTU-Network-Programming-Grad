@@ -152,6 +152,7 @@ class console {
 
         void encode(std::string *data) {
             /* escape XML/HTML */
+            /* Refer to http://www.interfacebus.com/html_escape_codes.html */
             for(size_t pos = 0; pos != data->size(); pos++) {
                 switch(data->at(pos)) {
                     case '&':
@@ -170,10 +171,15 @@ class console {
                         data->replace(pos, 1, "&gt;");
                         break;
                     case '\r':
-                        data->replace(pos, 1, "\\r");
+                        // data->replace(pos, 1, "\\r");
+                        data->replace(pos, 1, "&#13;");
                         break;
                     case '\n':
-                        data->replace(pos, 1, "\\n");
+                        // data->replace(pos, 1, "\\n");
+                        data->replace(pos, 1, "&#10;");
+                        break;
+                    case '\\':
+                        data->replace(pos, 1, "&#92;");
                         break;
                     default:
                         break;
@@ -340,23 +346,6 @@ class console {
                 sessions[i]->join();
                 delete sessions[i];
             }
-
-            // signal(SIGCHLD, sigchld_handler);
-
-            // pid_t pid;
-            // for (size_t i = 0; i < nserv; i++) {
-            //     pid = fork();
-            //     if (pid < 0) {
-            //         perror("fork error");
-            //         exit(1);
-            //     }
-            //     else if (pid == 0) {
-            //         session(i);
-            //     }
-            //     else {
-
-            //     }
-            // }
         }
 };
 

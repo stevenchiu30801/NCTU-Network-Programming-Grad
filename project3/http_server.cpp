@@ -5,6 +5,7 @@
 #include <regex>
 #include <signal.h>
 #include <string>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -25,7 +26,9 @@ class Session : public enable_shared_from_this<Session> {
         enum { max_length = 1024 };
         ip::tcp::socket _socket;
         array<char, max_length> _buffer;
-        string method, url, version;
+        string server_addr, server_port, remote_addr, remote_port;
+        /* REQUEST_METHOD. REQUEST_URI, SCRIPT_NAME, QUERY_STRING, SERVER_PROTOCOL, HTTP_HOST */
+        string method, uri, script, query, protocol, host;
 
     public:
         Session(ip::tcp::socket socket)
@@ -40,6 +43,11 @@ class Session : public enable_shared_from_this<Session> {
                 buffer(_buffer, max_length),
                 [this, self](boost::system::error_code ec, std::size_t bytes_transferred) {
                     if (!ec) {
+                        server_addr = _socket.local_endpoint().address().to_string();
+                        server_port = std::to_string(_socket.local_endpoint().port());
+                        remote_addr = _socket.remote_endpoint().address().to_string();
+                        remote_port = std::to_string(_socket.remote_endpoint().port());
+
                         do_parse(_buffer.data());
                         do_response();
                     }
@@ -48,116 +56,65 @@ class Session : public enable_shared_from_this<Session> {
 
         void do_parse(string data) {
             stringstream ss_request_line(data);
+            string keys;
             ss_request_line >> method;
-            ss_request_line >> url;
-            ss_request_line >> version;
+            ss_request_line >> uri;
+            ss_request_line >> protocol;
+            ss_request_line >> keys;
+            ss_request_line >> host;
 
-            // cout << method << " " << url << " " << version << endl;
+            regex uri_regex("\\?");
+            smatch uri_match;
+
+            regex_search(uri, uri_match, uri_regex);
+            if (uri_match.empty() == false) {
+                script = uri_match.prefix().str();
+                query = uri_match.suffix().str();
+            }
+            else {
+                script = uri;
+                query.clear();
+            }
         }
 
         void do_response() {
-            string path, query;
-            regex url_regex("\\?");
-            smatch url_match;
+            struct stat buffer;
+            if (stat(script.substr(1).c_str(), &buffer) != 0) {
+                string response = "HTTP/1.1 404 Not Found\n";
+                write(_socket, boost::asio::buffer(response, response.length()));
+                return;
+            }
 
-            regex_search(url, url_match, url_regex);
-            if (url_match.empty() == false) {
-                /* console.cgi?<query> */
-                // cout << url_match.prefix().str().substr(1) 
-                //      << " " << url_match.suffix().str() << endl;
+            pid_t pid;
+            pid = fork();
 
-                path = url_match.prefix().str().substr(1);
+            if (pid < 0) {
+                perror("fork error");
+                exit(1);
+            }
+            else if (pid == 0) {
+                /* child process */
+                /* set http environment variable */
+                setenv("REQUEST_METHOD", method.c_str(), 1);
+                setenv("REQUEST_URI", uri.c_str(), 1);
+                setenv("QUERY_STRING", query.c_str(), 1);
+                setenv("SERVER_PROTOCOL", protocol.c_str(), 1);
+                setenv("HTTP_HOST", host.c_str(), 1);
+                setenv("SERVER_ADDR", server_addr.c_str(), 1);
+                setenv("SERVER_PORT", server_port.c_str(), 1);
+                setenv("REMOTE_ADDR", remote_addr.c_str(), 1);
+                setenv("REMOTE_PORT", remote_port.c_str(), 1);
 
-                size_t n, pos;
-                string query = url_match.suffix().str();
-                regex query_regex("h[0-4]=((?:nplinux|npbsd)[0-9].cs.nctu.edu.tw)&p[0-4]=([0-9]+)&f[0-4]=([^&]+)"); 
-                smatch query_match;
-                string host[MAX_SHELL_SESSION], file[MAX_SHELL_SESSION];
-                int port[MAX_SHELL_SESSION];
-
-                pos = 0;
-                for (n = 0; n < MAX_SHELL_SESSION; n++) {
-                    query = query.substr(pos);
-                    regex_search(query, query_match, query_regex);
-                    if (query_match.empty() == false) {
-                        host[n] = query_match[1];
-                        port[n] = atoi(query_match.str(2).c_str());
-                        file[n] = query_match[3];
-                        pos = query_match[0].length() + 1;
-
-                        // cout << n << ": ";
-                        // cout << host[n] << " ";
-                        // cout << port[n] << " ";
-                        // cout << file[n] << endl;
-                    }
-                    else {
-                        for (size_t i = n; i < MAX_SHELL_SESSION; i++) {
-                            host[n].clear();
-                            port[n] = -1;
-                            file[n].clear();
-                        }
-                        break;
-                    }
-                }
-
-                pid_t pid;
-                pid = fork();
-
-                if (pid < 0) {
-                    perror("fork error");
-                    exit(1);
-                }
-                else if (pid == 0) {
-                    /* child process */
-                    char *argv[] = {NULL};
-                    int sockfd = _socket.native_handle();
-
-                    /* set environment variables */
-                    for (size_t i = 0; i < MAX_SHELL_SESSION; i++) {
-                        char name[3];
-                        if (host[i].empty() == false) {
-                            sprintf(name, "h%d", (int)i);
-                            setenv(name, host[i].c_str(), 1);
-                            sprintf(name, "p%d", (int)i);
-                            setenv(name, to_string(port[i]).c_str(), 1);
-                            sprintf(name, "f%d", (int)i);
-                            setenv(name, file[i].c_str(), 1);
-                        }
-                    }
-
-                    dup2(sockfd, STDIN_FILENO);
-                    dup2(sockfd, STDOUT_FILENO);
-                    cout << "HTTP/1.1 200 OK" << endl;
-                    execv(path.c_str() /*console.cgi*/, argv);
-                }
-                else {
-                    /* parent process */
-                }
+                char *argv[] = {NULL};
+                int sockfd = _socket.native_handle();
+                dup2(sockfd, STDIN_FILENO);
+                dup2(sockfd, STDOUT_FILENO);
+                cout << "HTTP/1.1 200 OK" << endl;
+                execv(script.substr(1).c_str(), argv);
             }
             else {
-                /* panel.cgi */
-                // cout << url.substr(1) << endl;
-
-                pid_t pid;
-                pid = fork();
-
-                if (pid < 0) {
-                    perror("fork error");
-                    exit(1);
-                }
-                else if (pid == 0) {
-                    /* child process */
-                    char *argv[] = {NULL};
-                    int sockfd = _socket.native_handle();
-                    dup2(sockfd, STDIN_FILENO);
-                    dup2(sockfd, STDOUT_FILENO);
-                    cout << "HTTP/1.1 200 OK" << endl;
-                    execv(url.substr(1).c_str(), argv);
-                }
-                else {
-                    /* parent process */
-                    waitpid(pid, NULL, 0);
-                }
+                /* parent process */
+                waitpid(pid, NULL, 0);
             }
         }
 };

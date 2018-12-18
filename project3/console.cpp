@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <regex>
 #include <signal.h>
 #include <string>
 #include <sys/types.h>
@@ -18,19 +19,24 @@ using namespace boost::asio::ip;
 using namespace std;
 
 static size_t nserv;
-static char *host[MAX_SHELL_SESSION], *port[MAX_SHELL_SESSION], *file[MAX_SHELL_SESSION];
+static string host[MAX_SHELL_SESSION], port[MAX_SHELL_SESSION], file[MAX_SHELL_SESSION];
 
 void parse_env(void) {
-    nserv = 0;
-    for (size_t i = 0; i < MAX_SHELL_SESSION; i++) {
-        char name[3];
-        sprintf(name, "h%d", (int)i);
-        if ((host[i] = getenv(name)) != NULL) {
-            nserv++;
-            sprintf(name, "p%d", (int)i);
-            port[i] = getenv(name);
-            sprintf(name, "f%d", (int)i);
-            file[i] = getenv(name);
+    size_t pos;
+    string query = getenv("QUERY_STRING");
+    regex query_regex("h[0-4]=((?:nplinux|npbsd)[0-9].cs.nctu.edu.tw)&p[0-4]=([0-9]+)&f[0-4]=([^&]+)");
+    smatch query_match;
+
+    pos = 0;
+    for (nserv = 0; nserv < MAX_SHELL_SESSION; nserv++) {
+        query = query.substr(pos);
+        regex_search(query, query_match, query_regex);
+        if (query_match.empty() == false) {
+            host[nserv] = query_match[1];
+            port[nserv] = query_match[2];
+            file[nserv] = query_match[3];
+
+            pos = query_match[0].length() + 1;
         }
         else
             break;
@@ -110,6 +116,7 @@ void sigchld_handler(int signo) {
 
 void encode(std::string *data) {
     /* escape XML/HTML */
+    /* Refer to http://www.interfacebus.com/html_escape_codes.html */
     for(size_t pos = 0; pos != data->size(); pos++) {
         switch(data->at(pos)) {
             case '&':
@@ -128,10 +135,15 @@ void encode(std::string *data) {
                 data->replace(pos, 1, "&gt;");
                 break;
             case '\r':
-                data->replace(pos, 1, "\\r");
+                // data->replace(pos, 1, "\\r");
+                data->replace(pos, 1, "&#13;");
                 break;
             case '\n':
-                data->replace(pos, 1, "\\n");
+                // data->replace(pos, 1, "\\n");
+                data->replace(pos, 1, "&#10;");
+                break;
+            case '\\':
+                data->replace(pos, 1, "&#92;");
                 break;
             default:
                 break;
