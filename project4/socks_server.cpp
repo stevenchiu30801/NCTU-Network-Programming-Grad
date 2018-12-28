@@ -262,7 +262,7 @@ class Session : public enable_shared_from_this<Session> {
 
         void do_write_local(size_t length) {
             auto self(shared_from_this());
-            _socket.async_send(
+            async_write(_socket,
                 boost::asio::buffer(remote_buffer, length),
                 [this, self](boost::system::error_code ec, size_t) {
                     if (!ec) do_read_remote();
@@ -272,7 +272,7 @@ class Session : public enable_shared_from_this<Session> {
 
         void do_write_remote(size_t length) {
             auto self(shared_from_this());
-            conn_socket.async_send(
+            async_write(conn_socket,
                 boost::asio::buffer(local_buffer, length),
                 [this, self](boost::system::error_code ec, size_t) {
                     if (!ec) do_read_local();
